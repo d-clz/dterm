@@ -67,6 +67,8 @@ type Model struct {
 	tunnels      []Tunnel
 	tunnelModal  *tunnelModal
 
+	syncInput bool // when true, keyboard input is broadcast to all panes
+
 	paneIDSeq   int
 	tunnelIDSeq int
 }
@@ -410,13 +412,61 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleBookmarkKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	bv := &m.bookmarks
+	if bv.searching {
+		switch msg.String() {
+		case "esc":
+			bv.CancelSearch()
+		case "enter":
+			bv.ConfirmSearch()
+			// connect immediately if exactly one result
+			if len(bv.visible) == 1 {
+				bm := bv.Selected()
+				if bm != nil {
+					return m.openPane(*bm)
+				}
+			}
+		case "backspace", "ctrl+h":
+			bv.BackspaceSearch()
+		default:
+			if len(msg.Runes) == 1 {
+				bv.AppendSearch(msg.Runes[0])
+			}
+		}
+		return m, nil
+	}
+
 	switch msg.String() {
+	case "/":
+		bv.StartSearch()
+	case "esc":
+		if bv.filter != "" {
+			bv.CancelSearch()
+		}
 	case "up", "k":
-		m.bookmarks.Up()
+		bv.Up()
 	case "down", "j":
-		m.bookmarks.Down()
+		bv.Down()
+	case "h", "left":
+		if bv.viewMode == viewModeGroup {
+			bv.PrevGroup()
+		}
+	case "l", "right":
+		if bv.viewMode == viewModeGroup {
+			bv.NextGroup()
+		}
+	case "tab":
+		if bv.viewMode == viewModeGroup {
+			bv.NextGroup()
+		}
+	case "shift+tab":
+		if bv.viewMode == viewModeGroup {
+			bv.PrevGroup()
+		}
+	case "g":
+		bv.ToggleViewMode()
 	case "enter":
-		bm := m.bookmarks.Selected()
+		bm := bv.Selected()
 		if bm != nil {
 			return m.openPane(*bm)
 		}
@@ -458,7 +508,14 @@ func (m Model) handleTerminalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.active < len(m.panes) {
 		m.panes[m.active].ClearSel()
 		m.panes[m.active].ScrollToBottom()
-		m.panes[m.active].WriteInput(keyBytes(msg))
+		data := keyBytes(msg)
+		if m.syncInput {
+			for i := range m.panes {
+				m.panes[i].WriteInput(data)
+			}
+		} else {
+			m.panes[m.active].WriteInput(data)
+		}
 	}
 	return m, nil
 }
@@ -475,6 +532,7 @@ func (m Model) handleTerminalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 //	x        close active pane
 //	b / spc  back to bookmark list
 //	t        toggle per-line timestamps
+//	s        toggle sync (broadcast input to all panes)
 //	q        quit dterm
 //	ctrl+b   send literal ^B to SSH
 func (m Model) handleChord(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -506,6 +564,8 @@ func (m Model) handleChord(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.active < len(m.panes) {
 			m.panes[m.active].ToggleTimestamp()
 		}
+	case "s":
+		m.syncInput = !m.syncInput
 	case "f":
 		if m.active < len(m.panes) && m.panes[m.active].session != nil {
 			return m, openSftpCmd(m.active, m.panes[m.active].session.Client())
@@ -705,7 +765,14 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			if msg.Action == tea.MouseActionRelease && m.active < len(m.panes) {
 				text, _ := clipboard.ReadAll()
 				if text != "" {
-					m.panes[m.active].WriteInput([]byte(text))
+					data := []byte(text)
+					if m.syncInput {
+						for i := range m.panes {
+							m.panes[i].WriteInput(data)
+						}
+					} else {
+						m.panes[m.active].WriteInput(data)
+					}
 				}
 			}
 		case tea.MouseButtonWheelUp:
@@ -820,6 +887,9 @@ func (m Model) treeRender(node *tileNode) string {
 	if node.dir == splitNone {
 		if node.pane < len(m.panes) {
 			badge := m.tunnelBadge(m.panes[node.pane].id)
+			if m.syncInput {
+				badge += styleSyncBadge.Render(" [sync]")
+			}
 			return m.panes[node.pane].View(node.pane == m.active, badge)
 		}
 		return ""

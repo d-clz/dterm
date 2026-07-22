@@ -1046,10 +1046,12 @@ func (m *sftpModal) renderHints(w int) string {
 	switch {
 	case m.mkdirMode:
 		hint = "enter confirm  esc cancel"
+	case m.ap().editing:
+		hint = "enter navigate  tab complete  esc cancel"
 	case m.confirm != confirmNone:
 		hint = "[y] yes  [n] cancel"
 	default:
-		hint = "h/l panel  j/k move  enter open  backspace back  s sync  m mkdir  d delete  r refresh  esc close"
+		hint = "h/l panel  j/k move  enter open  backspace back  s sync  m mkdir  d delete  ctrl+l path  r refresh  esc close"
 	}
 	if len(hint) > w {
 		hint = hint[:w]

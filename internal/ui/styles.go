@@ -107,4 +107,8 @@ var (
 	styleTunnelBadge = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("#73F59F")).
 				Bold(true)
+
+	styleSyncBadge = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#FFB86C")).
+			Bold(true)
 )

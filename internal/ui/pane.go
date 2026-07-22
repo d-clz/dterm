@@ -251,7 +251,7 @@ func (p *Pane) View(active bool, tunnelBadge string) string {
 		body.Width(innerW).Height(innerH).Render(content)
 }
 
-func (p *Pane) topBorderLine(innerW int, active bool, tunnelBadge string) string {
+func (p *Pane) topBorderLine(innerW int, active bool, badge string) string {
 	title := p.bookmark.User + "@" + p.bookmark.Host
 	if !p.connected {
 		title += " (" + p.statusText + ")"
@@ -259,9 +259,7 @@ func (p *Pane) topBorderLine(innerW int, active bool, tunnelBadge string) string
 	if p.term.IsScrolled() {
 		title += " [scroll]"
 	}
-	if tunnelBadge != "" {
-		title += tunnelBadge
-	}
+	// badge is kept separate — it contains ANSI codes that must not be rune-counted
 
 	var fg lipgloss.TerminalColor = subtle
 	if active {
@@ -274,23 +272,24 @@ func (p *Pane) topBorderLine(innerW int, active bool, tunnelBadge string) string
 		return bar.Render("╭" + strings.Repeat("─", max(0, total-2)) + "╮")
 	}
 
+	badgeW := lipgloss.Width(badge) // visual width, ANSI codes stripped
 	titleWithSpaces := " " + title + " "
 	titleRunes := []rune(titleWithSpaces)
-	maxTitle := total - 4 // ╭─{title}─╮ needs 4 chars of overhead
+	maxTitle := total - 4 - badgeW // ╭─{title}─{badge}╮ overhead
+	if maxTitle < 0 {
+		maxTitle = 0
+	}
 	if len(titleRunes) > maxTitle {
-		if maxTitle < 0 {
-			maxTitle = 0
-		}
 		titleRunes = titleRunes[:maxTitle]
 		titleWithSpaces = string(titleRunes)
 	}
 
-	fill := total - len(titleRunes) - 3 // ╭─ title ─{fill}╮
+	fill := total - len(titleRunes) - 3 - badgeW // ╭─ title ─{fill}{badge}╮
 	if fill < 1 {
 		fill = 1
 	}
 
-	return bar.Render("╭─") + titleWithSpaces + bar.Render(strings.Repeat("─", fill)+"╮")
+	return bar.Render("╭─") + titleWithSpaces + bar.Render(strings.Repeat("─", fill)) + badge + bar.Render("╮")
 }
 
 func (p *Pane) renderWithTimestamps(active bool) string {
