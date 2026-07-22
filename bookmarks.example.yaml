@@ -1,0 +1,39 @@
+# ~/.dterm/bookmarks.yaml
+bookmarks:
+  - name: dev-bastion
+    host: 10.10.1.100
+    port: 22
+    user: admin
+    key_file: ~/.ssh/id_rsa
+    group: dev
+
+  - name: prod-master-01
+    host: 10.20.1.10
+    port: 22
+    user: core
+    key_file: ~/.ssh/id_rsa
+    group: prod
+
+  - name: okd-worker-03
+    host: 10.20.1.23
+    port: 22
+    user: core
+    key_file: ~/.ssh/id_rsa
+    group: prod
+
+  - name: gitlab-runner
+    host: 10.10.2.50
+    port: 2222
+    user: gitlab
+    key_file: ~/.ssh/id_gitlab
+    group: ci
+
+  - name: homelab-proxmox
+    host: 192.168.1.100
+    port: 22
+    user: root
+    key_file: ~/.ssh/id_homelab
+    group: home
+
+default_shell: /bin/bash
+log_dir: ~/.dterm/logs
