@@ -182,7 +182,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.sftpClients = append(m.sftpClients, &sftpClientHandle{client: msg.client})
-		modal, cmd := newSftpModal(msg.paneID, msg.client)
+		initRemote := ""
+		if m.sftpLastRemote != nil {
+			initRemote = m.sftpLastRemote[msg.paneID]
+		}
+		modal, cmd := newSftpModal(msg.paneID, msg.client, m.sftpLastLocal, initRemote)
 		m.sftp = modal
 		return m, cmd
 
@@ -521,15 +525,34 @@ func (m Model) handleTerminalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// 4. Forward everything else to SSH
 	if m.active < len(m.panes) {
-		m.panes[m.active].ClearSel()
-		m.panes[m.active].ScrollToBottom()
-		data := keyBytes(msg)
-		if m.syncInput {
-			for i := range m.panes {
-				m.panes[i].WriteInput(data)
+		switch msg.String() {
+		case "shift+insert":
+			text, _ := clipboard.ReadAll()
+			if text != "" {
+				data := []byte(text)
+				if m.syncInput {
+					for i := range m.panes {
+						m.panes[i].WriteInput(data)
+					}
+				} else {
+					m.panes[m.active].WriteInput(data)
+				}
 			}
-		} else {
-			m.panes[m.active].WriteInput(data)
+		case "ctrl+insert":
+			if text := m.panes[m.active].CopySelection(); text != "" {
+				_ = clipboard.WriteAll(text)
+			}
+		default:
+			m.panes[m.active].ClearSel()
+			m.panes[m.active].ScrollToBottom()
+			data := keyBytes(msg)
+			if m.syncInput {
+				for i := range m.panes {
+					m.panes[i].WriteInput(data)
+				}
+			} else {
+				m.panes[m.active].WriteInput(data)
+			}
 		}
 	}
 	return m, nil
@@ -716,6 +739,10 @@ func keyBytes(msg tea.KeyMsg) []byte {
 		return []byte("\x19")
 	case tea.KeyCtrlZ:
 		return []byte("\x1a")
+	case tea.KeyCtrlN:
+		return []byte("\x0e")
+	case tea.KeyCtrlV:
+		return []byte("\x16")
 	}
 	return nil
 }
@@ -755,6 +782,17 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			vtX, vtY := m.screenToVT(msg.X, msg.Y, pIdx)
 			switch msg.Action {
 			case tea.MouseActionPress:
+				now := time.Now()
+				samePos := msg.X == m.lastClick.x && msg.Y == m.lastClick.y && pIdx == m.lastClick.pane
+				rapid := now.Sub(m.lastClick.t) < 400*time.Millisecond
+				clickN := 1
+				if samePos && rapid {
+					clickN = m.lastClick.n + 1
+					if clickN > 3 {
+						clickN = 3
+					}
+				}
+				m.lastClick = clickTrack{t: now, x: msg.X, y: msg.Y, pane: pIdx, n: clickN}
 				m.active = pIdx
 				if pIdx < len(m.panes) {
 					for i := range m.panes {
@@ -762,7 +800,18 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 							m.panes[i].ClearSel()
 						}
 					}
-					m.panes[pIdx].StartSel(vtX, vtY)
+					switch clickN {
+					case 2:
+						if text := m.panes[pIdx].SelectWord(vtX, vtY); text != "" {
+							_ = clipboard.WriteAll(text)
+						}
+					case 3:
+						if text := m.panes[pIdx].SelectLine(vtY); text != "" {
+							_ = clipboard.WriteAll(text)
+						}
+					default:
+						m.panes[pIdx].StartSel(vtX, vtY)
+					}
 				}
 			case tea.MouseActionMotion:
 				if pIdx < len(m.panes) {
