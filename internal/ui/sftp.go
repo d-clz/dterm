@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -118,9 +119,10 @@ type sftpMkdirDoneMsg struct {
 // ---- entry & panel ----------------------------------------------------------
 
 type sftpEntry struct {
-	name  string
-	size  int64
-	isDir bool
+	name    string
+	size    int64
+	isDir   bool
+	modTime time.Time
 }
 
 type sftpPanel struct {
@@ -199,6 +201,8 @@ type sftpModal struct {
 	confirmLabel string
 	confirmMsg   string
 
+	showTime bool // toggle modified-time column
+
 	// Delete confirmation
 	deleteTarget string
 	deletePanel  int
@@ -217,8 +221,13 @@ func nextXferID() int {
 	return sftpXferSeq
 }
 
-func newSftpModal(paneID int, client *sftp.Client) (*sftpModal, tea.Cmd) {
-	home, _ := os.UserHomeDir()
+func newSftpModal(paneID int, client *sftp.Client, initLocal, initRemote string) (*sftpModal, tea.Cmd) {
+	if initLocal == "" {
+		initLocal, _ = os.UserHomeDir()
+	}
+	if initRemote == "" {
+		initRemote = "/"
+	}
 	mi := textinput.New()
 	mi.Prompt = " "
 	mi.Placeholder = "folder name"
@@ -226,14 +235,14 @@ func newSftpModal(paneID int, client *sftp.Client) (*sftpModal, tea.Cmd) {
 	m := &sftpModal{
 		paneID:      paneID,
 		client:      client,
-		local:       newSftpPanel(home),
-		remote:      newSftpPanel("/"),
-		activePanel: 1, // start on remote side
+		local:       newSftpPanel(initLocal),
+		remote:      newSftpPanel(initRemote),
+		activePanel: 1,
 		mkdirInput:  mi,
 	}
 	return m, tea.Batch(
-		loadLocalDir(0, home),
-		loadRemoteDir(client, 1, "/"),
+		loadLocalDir(0, initLocal),
+		loadRemoteDir(client, 1, initRemote),
 	)
 }
 
@@ -383,6 +392,9 @@ func (m *sftpModal) updateBrowse(msg tea.KeyMsg) (tea.Cmd, bool) {
 
 	case "m":
 		return m.startMkdir()
+
+	case "T":
+		m.showTime = !m.showTime
 	}
 
 	return nil, false
@@ -659,10 +671,14 @@ func loadLocalDir(panel int, dir string) tea.Cmd {
 		for _, e := range entries {
 			info, _ := e.Info()
 			var sz int64
-			if info != nil && !e.IsDir() {
-				sz = info.Size()
+			var mt time.Time
+			if info != nil {
+				if !e.IsDir() {
+					sz = info.Size()
+				}
+				mt = info.ModTime()
 			}
-			items = append(items, sftpEntry{name: e.Name(), isDir: e.IsDir(), size: sz})
+			items = append(items, sftpEntry{name: e.Name(), isDir: e.IsDir(), size: sz, modTime: mt})
 		}
 		sortEntries(items)
 		return sftpDirLoadedMsg{panel: panel, cwd: dir, entries: items}
@@ -678,9 +694,10 @@ func loadRemoteDir(client *sftp.Client, panel int, dir string) tea.Cmd {
 		items := make([]sftpEntry, 0, len(entries))
 		for _, e := range entries {
 			items = append(items, sftpEntry{
-				name:  e.Name(),
-				isDir: e.IsDir(),
-				size:  e.Size(),
+				name:    e.Name(),
+				isDir:   e.IsDir(),
+				size:    e.Size(),
+				modTime: e.ModTime(),
 			})
 		}
 		sortEntries(items)
@@ -1001,7 +1018,19 @@ func (m *sftpModal) renderPanel(p *sftpPanel, w, listH int, active bool) string 
 		if !e.isDir {
 			sizeStr = formatBytes(e.size)
 		}
-		maxName := w - len(sizeStr)
+		rightStr := sizeStr
+		if m.showTime {
+			tStr := "            " // 12-space placeholder
+			if !e.modTime.IsZero() {
+				tStr = e.modTime.Format("Jan 02 15:04")
+			}
+			if sizeStr != "" {
+				rightStr = tStr + "  " + sizeStr
+			} else {
+				rightStr = tStr
+			}
+		}
+		maxName := w - len(rightStr)
 		if maxName < 1 {
 			maxName = 1
 		}
@@ -1009,7 +1038,7 @@ func (m *sftpModal) renderPanel(p *sftpPanel, w, listH int, active bool) string 
 			runes := []rune(name)
 			name = string(runes[:maxName-1]) + "…"
 		}
-		line := fmt.Sprintf("%-*s%s", maxName, name, sizeStr)
+		line := fmt.Sprintf("%-*s%s", maxName, name, rightStr)
 
 		switch {
 		case idx == p.cursor && active:
@@ -1051,7 +1080,7 @@ func (m *sftpModal) renderHints(w int) string {
 	case m.confirm != confirmNone:
 		hint = "[y] yes  [n] cancel"
 	default:
-		hint = "h/l panel  j/k move  enter open  backspace back  s sync  m mkdir  d delete  ctrl+l path  r refresh  esc close"
+		hint = "h/l panel  j/k move  enter open  backspace back  s sync  m mkdir  d delete  T time  ctrl+l path  r refresh  esc close"
 	}
 	if len(hint) > w {
 		hint = hint[:w]

@@ -37,6 +37,13 @@ const (
 	prefixCtrlB // tmux-style prefix
 )
 
+type clickTrack struct {
+	t    time.Time
+	x, y int
+	pane int
+	n    int // consecutive click count: 1=single, 2=double, 3=triple
+}
+
 // tileNode is a node in the binary split tree.
 // Leaf nodes (dir == splitNone) own a pane; interior nodes own a split.
 type tileNode struct {
@@ -68,6 +75,10 @@ type Model struct {
 	tunnelModal  *tunnelModal
 
 	syncInput bool // when true, keyboard input is broadcast to all panes
+
+	sftpLastLocal  string
+	sftpLastRemote map[int]string
+	lastClick      clickTrack
 
 	paneIDSeq   int
 	tunnelIDSeq int
@@ -178,6 +189,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.sftp != nil {
 			cmd, close := m.sftp.update(msg)
 			if close {
+				m.saveSftpDirs()
 				m.sftp = nil
 			}
 			return m, cmd
@@ -398,6 +410,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.sftp != nil {
 		cmd, close := m.sftp.update(msg)
 		if close {
+			m.saveSftpDirs()
 			m.sftp = nil
 		}
 		return m, cmd
@@ -1088,6 +1101,17 @@ func (m Model) closePaneAt(idx int) (Model, tea.Cmd) {
 
 func (m Model) closeActivePane() (Model, tea.Cmd) {
 	return m.closePaneAt(m.active)
+}
+
+func (m *Model) saveSftpDirs() {
+	if m.sftp == nil {
+		return
+	}
+	if m.sftpLastRemote == nil {
+		m.sftpLastRemote = make(map[int]string)
+	}
+	m.sftpLastLocal = m.sftp.local.cwd
+	m.sftpLastRemote[m.sftp.paneID] = m.sftp.remote.cwd
 }
 
 func (m *Model) closeAll() {

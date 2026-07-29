@@ -226,6 +226,34 @@ func (p *Pane) ClearSel() {
 	p.hasSelection = false
 }
 
+func (p *Pane) CopySelection() string {
+	if !p.hasSelection {
+		return ""
+	}
+	return p.term.TextRange(p.selStart.x, p.selStart.y, p.selEnd.x, p.selEnd.y)
+}
+
+func (p *Pane) SelectWord(x, y int) string {
+	x1, x2 := p.term.WordBounds(x, y)
+	p.selecting = false
+	p.selStart = selPt{x1, y}
+	p.selEnd = selPt{x2, y}
+	p.hasSelection = x1 != x2
+	if !p.hasSelection {
+		return ""
+	}
+	return p.term.TextRange(x1, y, x2, y)
+}
+
+func (p *Pane) SelectLine(y int) string {
+	cols := p.term.Cols()
+	p.selecting = false
+	p.selStart = selPt{0, y}
+	p.selEnd = selPt{cols - 1, y}
+	p.hasSelection = cols > 0
+	return p.term.TextRange(0, y, cols-1, y)
+}
+
 func (p *Pane) View(active bool, tunnelBadge string) string {
 	innerW, innerH := paneInner(p.width, p.height)
 
