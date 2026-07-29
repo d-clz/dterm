@@ -114,25 +114,30 @@ func (p *Pane) CancelPassword() {
 	p.statusText = "cancelled"
 }
 
-// readLoop continuously reads from SSH stdout and sends messages.
+// readLoop reads a batch of SSH output and returns it as a message.
+// ReadBatch coalesces up to 2ms of data to reduce render frequency.
 func readLoop(id int, sess *sshclient.Session) tea.Cmd {
-	return func() tea.Msg {
-		buf := make([]byte, 4096)
-		n, err := sess.Read(buf)
-		if n > 0 {
-			// Return data first; the next iteration will surface the error.
-			return sshOutputMsg{paneID: id, data: buf[:n]}
-		}
+	return func() (msg tea.Msg) {
+		defer func() {
+			if r := recover(); r != nil {
+				dlog.Log("pane %d: PANIC in readLoop: %v", id, r)
+				msg = sshClosedMsg{paneID: id, err: fmt.Errorf("panic: %v", r)}
+			}
+		}()
+		data, err := sess.ReadBatch()
 		if err != nil {
 			return sshClosedMsg{paneID: id, err: err}
 		}
-		return sshOutputMsg{paneID: id, data: nil}
+		return sshOutputMsg{paneID: id, data: data}
 	}
 }
 
 func (p *Pane) HandleOutput(data []byte) {
-	p.term.ScrollToBottom()
+	atBottom := !p.term.IsScrolled()
 	p.term.Write(data)
+	if atBottom {
+		p.term.ScrollToBottom()
+	}
 	p.lastActivity = time.Now()
 }
 

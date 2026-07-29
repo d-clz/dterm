@@ -23,5 +23,9 @@ func agentAuthMethod() ssh.AuthMethod {
 		return nil
 	}
 	dlog.Log("agent: connected via SSH_AUTH_SOCK")
-	return ssh.PublicKeysCallback(agent.NewClient(conn).Signers)
+	c := agent.NewClient(conn)
+	return ssh.PublicKeysCallback(func() ([]ssh.Signer, error) {
+		defer conn.Close()
+		return c.Signers()
+	})
 }

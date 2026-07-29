@@ -124,6 +124,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.panes[i].session = msg.session
 				m.panes[i].connected = true
 				m.panes[i].statusText = "connected"
+				m.panes[i].tempPassword = ""
 				m.resizePanes()
 				// Register saved tunnels as stopped — user toggles them on manually
 				for _, spec := range m.panes[i].bookmark.Tunnels {
@@ -484,6 +485,7 @@ func (m Model) handleBookmarkKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.openPane(*bm)
 		}
 	case "q", "ctrl+c":
+		m.closeAll()
 		return m, tea.Quit
 	}
 	return m, nil

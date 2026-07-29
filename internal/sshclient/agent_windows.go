@@ -18,5 +18,9 @@ func agentAuthMethod() ssh.AuthMethod {
 		return nil
 	}
 	dlog.Log("agent: connected via named pipe")
-	return ssh.PublicKeysCallback(agent.NewClient(f).Signers)
+	c := agent.NewClient(f)
+	return ssh.PublicKeysCallback(func() ([]ssh.Signer, error) {
+		defer f.Close()
+		return c.Signers()
+	})
 }

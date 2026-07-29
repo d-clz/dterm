@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -185,7 +186,7 @@ func Connect(bm config.Bookmark) (*Session, error) {
 		Timeout:         10 * time.Second,
 	}
 
-	addr := net.JoinHostPort(bm.Host, fmt.Sprintf("%d", bm.Port))
+	addr := net.JoinHostPort(bm.Host, strconv.Itoa(bm.Port))
 	dlog.Log("dial: %s", addr)
 	client, err := ssh.Dial("tcp", addr, cfg)
 	if err != nil {
