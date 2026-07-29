@@ -111,4 +111,9 @@ var (
 	styleSyncBadge = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#FFB86C")).
 			Bold(true)
+
+	// Pane border title bar styles — pre-computed to avoid lipgloss.NewStyle()
+	// allocation on every pane on every render frame.
+	stylePaneBarActive   = lipgloss.NewStyle().Foreground(highlight)
+	stylePaneBarInactive = lipgloss.NewStyle().Foreground(subtle)
 )

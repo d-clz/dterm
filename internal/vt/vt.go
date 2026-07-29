@@ -8,6 +8,16 @@ import (
 	"unicode/utf8"
 )
 
+// smallInts is a pre-built lookup for strconv.Itoa(0..255), eliminating
+// per-call allocations in the SGR rendering hot path.
+var smallInts [256]string
+
+func init() {
+	for i := range smallInts {
+		smallInts[i] = strconv.Itoa(i)
+	}
+}
+
 // ---- color / style --------------------------------------------------------
 
 type ColorMode uint8
@@ -61,6 +71,7 @@ type Terminal struct {
 	pendingWrap   bool // deferred wrap: set when cursor lands on last col
 	scrollTop     int  // DECSTBM top margin (0-based, inclusive)
 	scrollBottom  int  // DECSTBM bottom margin (0-based, inclusive)
+	writeTime     time.Time // timestamp of the current Write() call, shared by putRune
 	// Alternate screen (DECSET 1049 / 47)
 	altActive    bool
 	altCells     [][]Cell
@@ -194,7 +205,13 @@ func (t *Terminal) clamp() {
 // ---- input ----------------------------------------------------------------
 
 func (t *Terminal) Write(p []byte) {
-	data := append(t.partial, p...)
+	t.writeTime = time.Now()
+	var data []byte
+	if len(t.partial) == 0 {
+		data = p // avoid copy when no incomplete sequence is buffered
+	} else {
+		data = append(t.partial, p...)
+	}
 	t.partial = nil
 
 	for len(data) > 0 {
@@ -264,7 +281,7 @@ func (t *Terminal) putRune(r rune) {
 		}
 		if t.curY >= 0 && t.curY < t.rows && t.curX >= 0 && t.curX < t.cols {
 			t.cells[t.curY][t.curX] = Cell{Ch: r, Style: t.curStyle}
-			t.rowTimes[t.curY] = time.Now()
+			t.rowTimes[t.curY] = t.writeTime
 		}
 		t.curX++
 		if t.curX >= t.cols {
@@ -712,7 +729,7 @@ func (t *Terminal) renderRow(y int, tweak func(x, y int, s Style) Style) string 
 			s = tweak(x, y, s)
 		}
 		if s != cur {
-			sb.WriteString(sgrCode(s))
+			writeSGR(&sb, s)
 			cur = s
 		}
 		ch := cell.Ch
@@ -808,12 +825,13 @@ func (t *Terminal) RenderRowWithSel(y, x1, y1, x2, y2 int) string {
 	})
 }
 
-// sgrCode returns the ANSI escape sequence to set the given style from scratch.
-func sgrCode(to Style) string {
+// writeSGR writes the ANSI SGR escape sequence for style to directly into sb,
+// avoiding all intermediate string allocations compared to a string-returning approach.
+func writeSGR(sb *strings.Builder, to Style) {
 	if to == (Style{}) {
-		return "\x1b[0m"
+		sb.WriteString("\x1b[0m")
+		return
 	}
-	var sb strings.Builder
 	sb.WriteString("\x1b[0")
 	if to.Bold {
 		sb.WriteString(";1")
@@ -833,38 +851,47 @@ func sgrCode(to Style) string {
 	if to.Strike {
 		sb.WriteString(";9")
 	}
-	sb.WriteString(colorSGR(to.FG, true))
-	sb.WriteString(colorSGR(to.BG, false))
+	writeColorSGR(sb, to.FG, true)
+	writeColorSGR(sb, to.BG, false)
 	sb.WriteByte('m')
-	return sb.String()
 }
 
-func colorSGR(c Color, fg bool) string {
+// writeColorSGR writes the color portion of an SGR sequence to sb.
+// Uses the pre-built smallInts table to avoid strconv.Itoa allocations.
+func writeColorSGR(sb *strings.Builder, c Color, fg bool) {
 	switch c.Mode {
 	case ColorDefault:
-		return ""
+		return
 	case ColorStandard:
 		base := 30
 		if !fg {
 			base = 40
 		}
+		sb.WriteByte(';')
 		if c.Value >= 8 {
-			return ";" + strconv.Itoa(base+60+int(c.Value-8))
+			sb.WriteString(smallInts[base+60+int(c.Value-8)])
+		} else {
+			sb.WriteString(smallInts[base+int(c.Value)])
 		}
-		return ";" + strconv.Itoa(base+int(c.Value))
 	case Color256:
 		if fg {
-			return ";38;5;" + strconv.Itoa(int(c.Value))
+			sb.WriteString(";38;5;")
+		} else {
+			sb.WriteString(";48;5;")
 		}
-		return ";48;5;" + strconv.Itoa(int(c.Value))
+		sb.WriteString(smallInts[c.Value])
 	case ColorRGB:
-		r, g, b := strconv.Itoa(int(c.R)), strconv.Itoa(int(c.G)), strconv.Itoa(int(c.B))
 		if fg {
-			return ";38;2;" + r + ";" + g + ";" + b
+			sb.WriteString(";38;2;")
+		} else {
+			sb.WriteString(";48;2;")
 		}
-		return ";48;2;" + r + ";" + g + ";" + b
+		sb.WriteString(smallInts[c.R])
+		sb.WriteByte(';')
+		sb.WriteString(smallInts[c.G])
+		sb.WriteByte(';')
+		sb.WriteString(smallInts[c.B])
 	}
-	return ""
 }
 
 // ---- helpers --------------------------------------------------------------
@@ -914,6 +941,39 @@ func p1(ps []int, idx int) int {
 
 func (t *Terminal) Cols() int { return t.cols }
 func (t *Terminal) Rows() int { return t.rows }
+
+// WordBounds returns the x range [x1, x2] of the word at column x on display row y.
+// A word is a contiguous run of non-space, non-null cells.
+func (t *Terminal) WordBounds(x, y int) (x1, x2 int) {
+	row, _ := t.getDisplayRow(y)
+	if row == nil || len(row) == 0 {
+		return x, x
+	}
+	if x < 0 {
+		x = 0
+	}
+	if x >= len(row) {
+		x = len(row) - 1
+	}
+	isWord := func(i int) bool {
+		if i < 0 || i >= len(row) {
+			return false
+		}
+		ch := row[i].Ch
+		return ch != 0 && ch != ' '
+	}
+	if !isWord(x) {
+		return x, x
+	}
+	x1, x2 = x, x
+	for x1 > 0 && isWord(x1-1) {
+		x1--
+	}
+	for x2 < len(row)-1 && isWord(x2+1) {
+		x2++
+	}
+	return x1, x2
+}
 
 // ScrollUp scrolls the viewport up n lines into the scrollback buffer.
 func (t *Terminal) ScrollUp(n int) {

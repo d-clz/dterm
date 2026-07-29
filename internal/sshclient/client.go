@@ -25,6 +25,63 @@ type Session struct {
 	stdout  io.Reader
 	mu      sync.Mutex
 	closed  bool
+
+	rdOnce  sync.Once
+	rdCh    chan []byte
+	rdErrCh chan error
+}
+
+// startRead lazily starts a background goroutine that reads continuously from
+// stdout and pushes chunks to rdCh. Called once per session.
+func (s *Session) startRead() {
+	s.rdOnce.Do(func() {
+		s.rdCh = make(chan []byte, 64)
+		s.rdErrCh = make(chan error, 1)
+		go func() {
+			buf := make([]byte, 32*1024)
+			for {
+				n, err := s.stdout.Read(buf)
+				if n > 0 {
+					chunk := make([]byte, n)
+					copy(chunk, buf[:n])
+					s.rdCh <- chunk
+				}
+				if err != nil {
+					s.rdErrCh <- err
+					return
+				}
+			}
+		}()
+	})
+}
+
+// ReadBatch blocks until at least one chunk of data arrives, then coalesces
+// additional data for up to 2ms. This batches SSH output into fewer, larger
+// messages so bubbletea re-renders less frequently during high-throughput output.
+func (s *Session) ReadBatch() ([]byte, error) {
+	s.startRead()
+	var acc []byte
+
+	// Wait for first chunk or error.
+	select {
+	case chunk := <-s.rdCh:
+		acc = chunk
+	case err := <-s.rdErrCh:
+		return nil, err
+	}
+
+	// Coalesce: keep reading for up to 2ms or 256KB.
+	timer := time.NewTimer(2 * time.Millisecond)
+	defer timer.Stop()
+	for len(acc) < 256*1024 {
+		select {
+		case chunk := <-s.rdCh:
+			acc = append(acc, chunk...)
+		case <-timer.C:
+			return acc, nil
+		}
+	}
+	return acc, nil
 }
 
 // expandPath handles both ~ and $ENV substitution.

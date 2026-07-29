@@ -294,11 +294,10 @@ func (p *Pane) topBorderLine(innerW int, active bool, badge string) string {
 	}
 	// badge is kept separate — it contains ANSI codes that must not be rune-counted
 
-	var fg lipgloss.TerminalColor = subtle
+	bar := stylePaneBarInactive
 	if active {
-		fg = highlight
+		bar = stylePaneBarActive
 	}
-	bar := lipgloss.NewStyle().Foreground(fg)
 
 	total := innerW + 2
 	if total < 5 {
