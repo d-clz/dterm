@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"time"
 
@@ -117,6 +118,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		return m.handleKey(msg)
+
+	default:
+		// Ctrl+Insert / Shift+Insert arrive as xterm CSI sequences
+		// ("\x1b[2;5~" / "\x1b[2;2~") that bubbletea's decoder doesn't
+		// recognize as a key, so it hands them back as an unexported
+		// []byte-backed message instead of a tea.KeyMsg. Detect that
+		// structurally since we can't name or type-assert the concrete
+		// type from outside the bubbletea package.
+		if seq, ok := unknownCSISeq(msg); ok {
+			return m.handleClipboardCSI(seq)
+		}
+		return m, nil
 
 	case sshConnectedMsg:
 		for i := range m.panes {
@@ -398,6 +411,48 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // ---- key routing ----------------------------------------------------------
 
+// unknownCSISeq extracts the raw bytes of an escape sequence bubbletea
+// couldn't decode into a key (reported as a private []byte-backed message
+// type). Detected structurally via reflection since the type can't be
+// named or type-asserted from outside the bubbletea package.
+func unknownCSISeq(msg tea.Msg) ([]byte, bool) {
+	v := reflect.ValueOf(msg)
+	if v.Kind() != reflect.Slice || v.Type().Elem().Kind() != reflect.Uint8 {
+		return nil, false
+	}
+	return v.Bytes(), true
+}
+
+// handleClipboardCSI implements Ctrl+Insert (copy) / Shift+Insert (paste)
+// from their raw xterm sequences, mirroring the modal/state guards that
+// handleKey applies to ordinary key messages.
+func (m Model) handleClipboardCSI(seq []byte) (tea.Model, tea.Cmd) {
+	if m.state != viewTerminal || m.tunnelModal != nil || m.sftp != nil {
+		return m, nil
+	}
+	if m.active >= len(m.panes) || m.panes[m.active].awaitingPassword {
+		return m, nil
+	}
+	switch string(seq) {
+	case "\x1b[2;5~": // ctrl+insert
+		if text := m.panes[m.active].CopySelection(); text != "" {
+			_ = clipboard.WriteAll(text)
+		}
+	case "\x1b[2;2~": // shift+insert
+		if text, _ := clipboard.ReadAll(); text != "" {
+			data := []byte(text)
+			if m.syncInput {
+				for i := range m.panes {
+					m.panes[i].WriteInput(data)
+				}
+			} else {
+				m.panes[m.active].WriteInput(data)
+			}
+		}
+	}
+	return m, nil
+}
+
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+q"))) {
 		m.closeAll()
@@ -525,34 +580,15 @@ func (m Model) handleTerminalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// 4. Forward everything else to SSH
 	if m.active < len(m.panes) {
-		switch msg.String() {
-		case "shift+insert":
-			text, _ := clipboard.ReadAll()
-			if text != "" {
-				data := []byte(text)
-				if m.syncInput {
-					for i := range m.panes {
-						m.panes[i].WriteInput(data)
-					}
-				} else {
-					m.panes[m.active].WriteInput(data)
-				}
+		m.panes[m.active].ClearSel()
+		m.panes[m.active].ScrollToBottom()
+		data := keyBytes(msg)
+		if m.syncInput {
+			for i := range m.panes {
+				m.panes[i].WriteInput(data)
 			}
-		case "ctrl+insert":
-			if text := m.panes[m.active].CopySelection(); text != "" {
-				_ = clipboard.WriteAll(text)
-			}
-		default:
-			m.panes[m.active].ClearSel()
-			m.panes[m.active].ScrollToBottom()
-			data := keyBytes(msg)
-			if m.syncInput {
-				for i := range m.panes {
-					m.panes[i].WriteInput(data)
-				}
-			} else {
-				m.panes[m.active].WriteInput(data)
-			}
+		} else {
+			m.panes[m.active].WriteInput(data)
 		}
 	}
 	return m, nil
@@ -669,6 +705,18 @@ func keyBytes(msg tea.KeyMsg) []byte {
 			return []byte("\x1b[1;3D")
 		}
 		return []byte("\x1b[D")
+	// Standard xterm modifier encoding for Ctrl+Arrow. bash's readline
+	// binds these to forward-word/backward-word by default (see
+	// /etc/inputrc's "\e[1;5C" / "\e[1;5D" entries); zsh needs the same
+	// two bound via `bindkey` (most distro zshrc skeletons already do).
+	case tea.KeyCtrlUp:
+		return []byte("\x1b[1;5A")
+	case tea.KeyCtrlDown:
+		return []byte("\x1b[1;5B")
+	case tea.KeyCtrlRight:
+		return []byte("\x1b[1;5C")
+	case tea.KeyCtrlLeft:
+		return []byte("\x1b[1;5D")
 	case tea.KeyHome:
 		return []byte("\x1b[H")
 	case tea.KeyEnd:
