@@ -10,10 +10,23 @@ import (
 	"dterm/internal/ui"
 )
 
+// Set via -ldflags at release build time (see .goreleaser.yaml).
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+)
+
 func main() {
 	dlog.Init()
 	cfgPath := flag.String("config", "", "path to bookmarks.yaml (default: ~/.dterm/bookmarks.yaml)")
+	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Printf("dterm %s (commit %s, built %s)\n", version, commit, date)
+		return
+	}
 
 	cfg, err := config.Load(*cfgPath)
 	if err != nil {

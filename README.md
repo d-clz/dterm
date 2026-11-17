@@ -39,6 +39,9 @@ One Go binary. No Electron. No JRE. No runtime dependencies.
 
 ## Quick start
 
+Grab a prebuilt binary for Linux, macOS, or Windows (amd64/arm64) from the
+[releases page](https://github.com/d-clz/dterm/releases), or build from source:
+
 ```bash
 go build -o dterm .
 ./dterm
